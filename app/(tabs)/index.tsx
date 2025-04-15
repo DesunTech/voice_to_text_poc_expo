@@ -7,7 +7,7 @@ export default function HomeScreen() {
   const [isListening, setIsListening] = useState(false);
   const [status, setStatus] = useState('Tap the button to start speaking');
   const [error, setError] = useState('');
-  const [partialResults, setPartialResults] = useState(''); // Track partial results separately initially
+  const [textBeforeListening, setTextBeforeListening] = useState(''); // Store text before starting voice input
 
   useEffect(() => {
     // Define event handlers
@@ -16,49 +16,34 @@ export default function HomeScreen() {
       setStatus('Listening...');
       setIsListening(true);
       setError('');
-      setPartialResults(''); // Clear partial results on start
     };
 
     const onSpeechEnd = (e: any) => {
       console.log('onSpeechEnd: ', e);
-      setStatus('Processing...');
+      setStatus('Processing... Tap button to start.'); // Give clearer next step
       setIsListening(false);
     };
 
     const onSpeechError = (e: any) => {
       console.log('onSpeechError: ', e);
       setError(JSON.stringify(e.error));
-      setStatus('Error');
-      setIsListening(false);
+      setStatus('Error. Tap button to try again.');
+      setIsListening(false); // Ensure listening state is reset on error
     };
 
     const onSpeechResults = (e: any) => {
       console.log('onSpeechResults: ', e);
       if (e.value && e.value.length > 0) {
-        // Append the final result to the existing text
-        setText(prevText => prevText + (prevText ? ' ' : '') + e.value[0]);
+        // Use textBeforeListening as the base for the final result
+        setText(textBeforeListening + (textBeforeListening ? ' ' : '') + e.value[0]);
       }
-      setStatus('Tap the button to start speaking'); // Reset status after final result
-      setPartialResults(''); // Clear partial results after final result
     };
 
     const onSpeechPartialResults = (e: any) => {
       console.log('onSpeechPartialResults: ', e);
       if (e.value && e.value.length > 0) {
-        setPartialResults(e.value[0]); // Store the latest partial result
-        // Update text input dynamically with partial result appended
-        // This handles the case where the user started typing first
-        setText(prevText => {
-           // Find the start of the last partial result appended
-           const lastPartialIndex = prevText.lastIndexOf(partialResults);
-           // If the previous partial result is found at the end, replace it
-           if (lastPartialIndex !== -1 && lastPartialIndex + partialResults.length === prevText.length) {
-               return prevText.substring(0, lastPartialIndex) + e.value[0];
-           } else {
-               // Otherwise, append the new partial result (potentially after typed text)
-               return prevText + (prevText ? ' ' : '') + e.value[0];
-           }
-        });
+        // Use textBeforeListening as the base for the partial result update
+        setText(textBeforeListening + (textBeforeListening ? ' ' : '') + e.value[0]);
       }
     };
 
@@ -72,35 +57,48 @@ export default function HomeScreen() {
     // Cleanup function
     return () => {
       // Remove all listeners and destroy the voice instance
-      Voice.destroy().then(Voice.removeAllListeners);
+      // It's important to destroy before removing listeners according to some docs/issues
+      Voice.destroy().then(Voice.removeAllListeners).catch(e => console.error("Error destroying voice instance:", e));
     };
-  }, [partialResults]); // Re-run effect slightly differently based on logic needing partialResults
+  }, [textBeforeListening]); // Update listeners if textBeforeListening changes (needed for closures)
 
   const startListening = async () => {
+    if (isListening) { // Prevent starting if already listening
+        console.log("Already listening, stop first.");
+        await stopListening(); // Attempt to stop cleanly before starting again
+    }
     try {
       // Reset states before starting
       setError('');
-      setPartialResults('');
-      // Don't clear `text` here to allow Keyboard -> Voice transition
+      setTextBeforeListening(text); // Store current text before starting
+      setStatus('Starting...'); // Indicate starting phase
       await Voice.start('en-US');
       console.log('Voice recognition started');
+      // Status updated by onSpeechStart
     } catch (e) {
       console.error('Error starting voice recognition: ', e);
       setError(JSON.stringify(e));
-      setStatus('Error starting');
+      setStatus('Error starting. Tap to retry.');
+      setIsListening(false); // Ensure state is reset
     }
   };
 
   const stopListening = async () => {
+     if (!isListening) { // Prevent stopping if not listening
+        console.log("Not listening, cannot stop.");
+        return;
+     }
     try {
+      setStatus('Stopping...'); // Indicate stopping phase
       await Voice.stop();
       console.log('Voice recognition stopped');
       setIsListening(false);
-      setStatus('Tap the button to start speaking'); // Reset status after stopping
+      // Status updated by onSpeechEnd or onSpeechError
     } catch (e) {
       console.error('Error stopping voice recognition: ', e);
       setError(JSON.stringify(e));
-      setStatus('Error stopping');
+      setStatus('Error stopping. Tap to retry.');
+      setIsListening(false); // Ensure state is reset
     }
   };
 
@@ -112,14 +110,17 @@ export default function HomeScreen() {
     }
   };
 
-  // Clear partial results tracking when user types manually
-  const handleTextInputChange = (newText: string) => {
-      // If the user is typing manually while listening might have been active,
-      // we might want to reset partialResults tracking to avoid conflicts,
-      // although the current logic tries to handle appending correctly.
-      // For simplicity now, let's assume typing clears the expectation of continuous speech replacing text.
-      // setPartialResults(''); // Optional: Decide if manual typing should clear partial tracking
+  // Renamed handler for clarity
+  const handleTextChange = (newText: string) => {
+      // If the user types while the app *thought* it was listening (e.g., due to error/state mismatch),
+      // ensure isListening is false.
+      if (isListening) {
+          setIsListening(false);
+          setStatus('Typing detected, listening stopped.');
+      }
       setText(newText);
+      // We don't need to manage textBeforeListening here,
+      // it gets updated only when startListening is explicitly called.
   }
 
 
@@ -129,14 +130,16 @@ export default function HomeScreen() {
       <TextInput
         style={styles.textInput}
         multiline
-        onChangeText={handleTextInputChange} // Use the wrapper
+        onChangeText={handleTextChange} // Use the new handler
         value={text}
         placeholder="Speak or type here..."
-        editable={!isListening} // Optionally disable editing while listening, but requirement allows mixing
+        // Let's keep it always editable based on requirement to mix typing/voice
+        // editable={!isListening}
       />
       <Button
         title={isListening ? 'Stop Listening' : 'Start Listening'}
         onPress={toggleListening}
+        disabled={status === 'Starting...' || status === 'Stopping...'} // Prevent rapid clicks
       />
       {error ? <Text style={styles.errorText}>Error: {error}</Text> : null}
     </View>
