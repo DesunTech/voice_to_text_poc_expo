@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { StyleSheet, Text, View, TextInput, Button, Platform } from 'react-native';
+import { StyleSheet, Text, View, TextInput, Button, Platform, TouchableWithoutFeedback, Keyboard } from 'react-native';
 import Voice from '@react-native-voice/voice';
 
 export default function HomeScreen() {
@@ -125,24 +125,24 @@ export default function HomeScreen() {
 
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.statusText}>{status}</Text>
-      <TextInput
-        style={styles.textInput}
-        multiline
-        onChangeText={handleTextChange} // Use the new handler
-        value={text}
-        placeholder="Speak or type here..."
-        // Let's keep it always editable based on requirement to mix typing/voice
-        // editable={!isListening}
-      />
-      <Button
-        title={isListening ? 'Stop Listening' : 'Start Listening'}
-        onPress={toggleListening}
-        disabled={status === 'Starting...' || status === 'Stopping...'} // Prevent rapid clicks
-      />
-      {error ? <Text style={styles.errorText}>Error: {error}</Text> : null}
-    </View>
+    <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
+      <View style={styles.container}>
+        <Text style={styles.statusText}>{status}</Text>
+        <TextInput
+          style={styles.textInput}
+          multiline
+          onChangeText={handleTextChange} // Use the new handler
+          value={text}
+          placeholder="Speak or type here..."
+        />
+        <Button
+          title={isListening ? 'Stop Listening' : 'Start Listening'}
+          onPress={toggleListening}
+          disabled={status === 'Starting...' || status === 'Stopping...'} // Prevent rapid clicks
+        />
+        {error ? <Text style={styles.errorText}>Error: {error}</Text> : null}
+      </View>
+    </TouchableWithoutFeedback>
   );
 }
 
