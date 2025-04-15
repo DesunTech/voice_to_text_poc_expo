@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { StyleSheet, Text, View, TextInput, Button, Platform, TouchableWithoutFeedback, Keyboard } from 'react-native';
 import Voice from '@react-native-voice/voice';
 
@@ -7,122 +7,128 @@ export default function HomeScreen() {
   const [isListening, setIsListening] = useState(false);
   const [status, setStatus] = useState('Tap the button to start speaking');
   const [error, setError] = useState('');
-  const [textBeforeListening, setTextBeforeListening] = useState(''); // Store text before starting voice input
+  const [textBeforeListening, setTextBeforeListening] = useState('');
 
+  // Refs to access latest state in useCallback handlers without causing re-renders/effect re-runs
+  const textRef = useRef(text);
+  const textBeforeListeningRef = useRef(textBeforeListening);
+
+  // Keep refs updated
+  useEffect(() => { textRef.current = text; }, [text]);
+  useEffect(() => { textBeforeListeningRef.current = textBeforeListening; }, [textBeforeListening]);
+
+  // Define event handlers using useCallback and refs
+  const onSpeechStartHandler = useCallback((e: any) => {
+    console.log('onSpeechStart: ', e);
+    setStatus('Listening...');
+    setIsListening(true);
+    setError('');
+  }, [setStatus, setIsListening, setError]); // Dependencies are stable state setters
+
+  const onSpeechEndHandler = useCallback((e: any) => {
+    console.log('onSpeechEnd: ', e);
+    setStatus('Processing... Tap button to start.');
+    setIsListening(false);
+  }, [setStatus, setIsListening]);
+
+  const onSpeechErrorHandler = useCallback((e: any) => {
+    console.log('onSpeechError: ', e);
+    setError(JSON.stringify(e.error));
+    setStatus('Error. Tap button to try again.');
+    setIsListening(false);
+  }, [setError, setStatus, setIsListening]);
+
+  const onSpeechResultsHandler = useCallback((e: any) => {
+    console.log('onSpeechResults: ', e);
+    if (e.value && e.value.length > 0) {
+      const currentTextBefore = textBeforeListeningRef.current; // Use ref
+      setText(currentTextBefore + (currentTextBefore ? ' ' : '') + e.value[0]); // Update state
+    }
+    // isListening and status are handled by onSpeechEnd/onSpeechError
+  }, [setText]); // textBeforeListeningRef is stable, setText is stable
+
+  const onSpeechPartialResultsHandler = useCallback((e: any) => {
+    console.log('onSpeechPartialResults: ', e);
+    if (e.value && e.value.length > 0) {
+      const currentTextBefore = textBeforeListeningRef.current; // Use ref
+      setText(currentTextBefore + (currentTextBefore ? ' ' : '') + e.value[0]); // Update state
+    }
+  }, [setText]); // textBeforeListeningRef is stable, setText is stable
+
+  // Effect for registering/unregistering listeners ONCE
   useEffect(() => {
-    // Define event handlers
-    const onSpeechStart = (e: any) => {
-      console.log('onSpeechStart: ', e);
-      setStatus('Listening...');
-      setIsListening(true);
-      setError('');
-    };
+    console.log("Setting up Voice listeners");
+    Voice.onSpeechStart = onSpeechStartHandler;
+    Voice.onSpeechEnd = onSpeechEndHandler;
+    Voice.onSpeechError = onSpeechErrorHandler;
+    Voice.onSpeechResults = onSpeechResultsHandler;
+    Voice.onSpeechPartialResults = onSpeechPartialResultsHandler;
 
-    const onSpeechEnd = (e: any) => {
-      console.log('onSpeechEnd: ', e);
-      setStatus('Processing... Tap button to start.'); // Give clearer next step
-      setIsListening(false);
-    };
-
-    const onSpeechError = (e: any) => {
-      console.log('onSpeechError: ', e);
-      setError(JSON.stringify(e.error));
-      setStatus('Error. Tap button to try again.');
-      setIsListening(false); // Ensure listening state is reset on error
-    };
-
-    const onSpeechResults = (e: any) => {
-      console.log('onSpeechResults: ', e);
-      if (e.value && e.value.length > 0) {
-        // Use textBeforeListening as the base for the final result
-        setText(textBeforeListening + (textBeforeListening ? ' ' : '') + e.value[0]);
-      }
-    };
-
-    const onSpeechPartialResults = (e: any) => {
-      console.log('onSpeechPartialResults: ', e);
-      if (e.value && e.value.length > 0) {
-        // Use textBeforeListening as the base for the partial result update
-        setText(textBeforeListening + (textBeforeListening ? ' ' : '') + e.value[0]);
-      }
-    };
-
-    // Add listeners
-    Voice.onSpeechStart = onSpeechStart;
-    Voice.onSpeechEnd = onSpeechEnd;
-    Voice.onSpeechError = onSpeechError;
-    Voice.onSpeechResults = onSpeechResults;
-    Voice.onSpeechPartialResults = onSpeechPartialResults;
-
-    // Cleanup function
     return () => {
-      // Remove all listeners and destroy the voice instance
-      // It's important to destroy before removing listeners according to some docs/issues
-      Voice.destroy().then(Voice.removeAllListeners).catch(e => console.error("Error destroying voice instance:", e));
+      console.log("Cleaning up Voice listeners and destroying instance");
+      // Destroy the instance and then remove all listeners
+      Voice.destroy()
+           .then(Voice.removeAllListeners)
+           .catch(e => console.error("Error destroying voice instance or removing listeners during cleanup:", e));
     };
-  }, [textBeforeListening]); // Update listeners if textBeforeListening changes (needed for closures)
+  }, [onSpeechStartHandler, onSpeechEndHandler, onSpeechErrorHandler, onSpeechResultsHandler, onSpeechPartialResultsHandler]); // Handlers are stable due to useCallback
 
-  const startListening = async () => {
-    if (isListening) { // Prevent starting if already listening
-        console.log("Already listening, stop first.");
-        await stopListening(); // Attempt to stop cleanly before starting again
+
+  const stopListening = useCallback(async () => {
+    // Use state directly here for the check, as it affects render
+    if (!isListening) {
+       console.log("Not listening, cannot stop.");
+       return;
+    }
+   try {
+     setStatus('Stopping...');
+     await Voice.stop();
+     console.log('Voice recognition stopped');
+     // State (isListening, status) is primarily updated by onSpeechEnd/onSpeechError handlers now
+   } catch (e) {
+     console.error('Error stopping voice recognition: ', e);
+     setError(JSON.stringify(e));
+     setStatus('Error stopping. Tap to retry.');
+     setIsListening(false); // Ensure state is reset on direct stop error
+   }
+ }, [isListening, setStatus, setError, setIsListening]); // Include state used in the check/logic
+
+  const startListening = useCallback(async () => {
+    if (isListening) {
+        console.log("Already listening, attempting to stop first.");
+        await stopListening(); // Use the useCallback version of stopListening
     }
     try {
-      // Reset states before starting
       setError('');
-      setTextBeforeListening(text); // Store current text before starting
-      setStatus('Starting...'); // Indicate starting phase
+      // Use the *current* text state directly here
+      setTextBeforeListening(textRef.current);
+      setStatus('Starting...');
       await Voice.start('en-US');
       console.log('Voice recognition started');
-      // Status updated by onSpeechStart
+      // isListening/status state updated by onSpeechStart handler
     } catch (e) {
       console.error('Error starting voice recognition: ', e);
       setError(JSON.stringify(e));
       setStatus('Error starting. Tap to retry.');
-      setIsListening(false); // Ensure state is reset
+      setIsListening(false); // Ensure state is reset on start error
     }
-  };
+  }, [isListening, stopListening, setError, setTextBeforeListening, setStatus, setIsListening]); // Include dependencies
 
-  const stopListening = async () => {
-     if (!isListening) { // Prevent stopping if not listening
-        console.log("Not listening, cannot stop.");
-        return;
-     }
-    try {
-      setStatus('Stopping...'); // Indicate stopping phase
-      await Voice.stop();
-      console.log('Voice recognition stopped');
-      setIsListening(false);
-      // Status updated by onSpeechEnd or onSpeechError
-    } catch (e) {
-      console.error('Error stopping voice recognition: ', e);
-      setError(JSON.stringify(e));
-      setStatus('Error stopping. Tap to retry.');
-      setIsListening(false); // Ensure state is reset
-    }
-  };
-
-  const toggleListening = () => {
+  const toggleListening = useCallback(() => {
     if (isListening) {
       stopListening();
     } else {
       startListening();
     }
-  };
+  }, [isListening, startListening, stopListening]);
 
-  // Renamed handler for clarity
-  const handleTextChange = (newText: string) => {
-      // If the user types while the app *thought* it was listening (e.g., due to error/state mismatch),
-      // ensure isListening is false.
+  const handleTextChange = useCallback((newText: string) => {
       if (isListening) {
-          setIsListening(false);
-          setStatus('Typing detected, listening stopped.');
+          console.log("Typing detected while listening, stopping voice.");
+          stopListening(); // Call the memoized stop function
       }
       setText(newText);
-      // We don't need to manage textBeforeListening here,
-      // it gets updated only when startListening is explicitly called.
-  }
-
+  }, [isListening, stopListening, setText]);
 
   return (
     <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
@@ -131,14 +137,14 @@ export default function HomeScreen() {
         <TextInput
           style={styles.textInput}
           multiline
-          onChangeText={handleTextChange} // Use the new handler
+          onChangeText={handleTextChange}
           value={text}
           placeholder="Speak or type here..."
         />
         <Button
           title={isListening ? 'Stop Listening' : 'Start Listening'}
           onPress={toggleListening}
-          disabled={status === 'Starting...' || status === 'Stopping...'} // Prevent rapid clicks
+          disabled={status === 'Starting...' || status === 'Stopping...'}
         />
         {error ? <Text style={styles.errorText}>Error: {error}</Text> : null}
       </View>
